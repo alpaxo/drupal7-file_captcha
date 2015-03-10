@@ -1,0 +1,174 @@
+<?php
+function file_captcha_field_widget_info_alter(&$info) {
+    $info['file_captcha']= array(
+      'label' => t('File captcha'),
+      'field types' => array('file'),
+      'settings' => array(
+        'replace_captcha' => true,
+      ),
+      'behaviors' => array(
+        'multiple values' => FIELD_BEHAVIOR_CUSTOM,
+        'default value' => FIELD_BEHAVIOR_NONE,
+      ),
+      'module' => 'file'
+    );
+}
+
+function file_captcha_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+
+  $defaults = array(
+    'fid' => 0,
+    'display' => !empty($field['settings']['display_default']),
+    'description' => '',
+  );
+
+  // Retrieve any values set in $form_state, as will be the case during AJAX
+  // rebuilds of this form.
+  if (isset($form_state['values'])) {
+    $path = array_merge($element['#field_parents'], array($field['field_name'], $langcode));
+    $path_exists = FALSE;
+    $values = drupal_array_get_nested_value($form_state['values'], $path, $path_exists);
+    if ($path_exists) {
+      $items = $values;
+      drupal_array_set_nested_value($form_state['values'], $path, NULL);
+    }
+  }
+
+  foreach ($items as $delta => $item) {
+    $items[$delta] = array_merge($defaults, $items[$delta]);
+    // Remove any items from being displayed that are not needed.
+    if ($items[$delta]['fid'] == 0) {
+      unset($items[$delta]);
+    }
+  }
+
+  // Re-index deltas after removing empty items.
+  $items = array_values($items);
+
+  // Update order according to weight.
+  $items = _field_sort_items($field, $items);
+
+  // Essentially we use the managed_file type, extended with some enhancements.
+  $element_info = element_info('managed_file');
+  $element += array(
+    '#type' => 'managed_file',
+    '#default_value' => isset($items[$delta]) ? $items[$delta] : $defaults,
+    '#upload_location' => file_field_widget_uri($field, $instance),
+    '#upload_validators' => file_field_widget_upload_validators($field, $instance),
+    '#value_callback' => 'file_field_widget_value',
+    '#process' => array_merge($element_info['#process'], array('file_field_widget_process')),
+    // Allows this field to return an array instead of a single value.
+    '#extended' => TRUE,
+  );
+
+  if ($field['cardinality'] == 1) {
+    // If there's only one field, return it as delta 0.
+    if (empty($element['#default_value']['fid'])) {
+      $element['#description'] = theme('file_upload_help', array('description' => $element['#description'], 'upload_validators' => $element['#upload_validators']));
+    }
+    $elements = array($element);
+  }
+  else {
+    // If there are multiple values, add an element for each existing one.
+    $delta = -1;
+    foreach ($items as $delta => $item) {
+      $elements[$delta] = $element;
+      $elements[$delta]['#default_value'] = $item;
+      $elements[$delta]['#weight'] = $delta;
+    }
+    // And then add one more empty row for new uploads.
+    $delta++;
+    if ($field['cardinality'] == FIELD_CARDINALITY_UNLIMITED || $delta < $field['cardinality']) {
+      $elements[$delta] = $element;
+      $elements[$delta]['#default_value'] = $defaults;
+      $elements[$delta]['#weight'] = $delta;
+      $elements[$delta]['#required'] = ($element['#required'] && $delta == 0);
+    }
+    // The group of elements all-together need some extra functionality
+    // after building up the full list (like draggable table rows).
+    $elements['#file_upload_delta'] = $delta;
+    $elements['#theme'] = 'file_widget_multiple';
+    $elements['#theme_wrappers'] = array('fieldset');
+    $elements['#process'] = array('file_field_widget_process_multiple');
+    $elements['#title'] = $element['#title'];
+    $elements['#description'] = $element['#description'];
+    $elements['#field_name'] = $element['#field_name'];
+    $elements['#language'] = $element['#language'];
+    $elements['#display_field'] = $field['settings']['display_field'];
+
+    // Add some properties that will eventually be added to the file upload
+    // field. These are added here so that they may be referenced easily through
+    // a hook_form_alter().
+    $elements['#file_upload_title'] = t('Add a new file');
+    $elements['#file_upload_description'] = theme('file_upload_help', array('description' => '', 'upload_validators' => $elements[0]['#upload_validators']));
+  }
+
+  return $elements;
+}
+
+function file_captcha_field_display_alter(&$display, $context) {
+	if ($context['entity_type'] == 'node' && $context['instance']['widget']['type'] == 'file_captcha') {
+//		$display['type'] = 'replace_captcha';
+	}
+}
+
+function file_captcha_node_view($node, $view_mode, $langcode) {
+	$all_fields = _field_info_collate_fields();
+	$fields = $all_fields['instances']['node'][$node->type];
+	foreach ($fields as $name => $field) {
+		if (isset($field['widget']) && $field['widget']['type'] == 'file_captcha' && isset($node->$name) && count($node->$name)) {
+//			$node->file_field_name = $name;
+			$file_data = (object)array_shift(array_shift($node->$name));
+			if (isset($node->content[$name])) {
+				$node->content[$name] = drupal_get_form('file_captcha_form_' . $file_data->fid, $file_data);
+			}
+		}
+	}
+	
+}
+
+function file_captcha_forms($form_id){
+	$forms = array();
+	if (strpos($form_id, 'file_captcha_') === 0){
+		$forms[$form_id] = array(
+			'callback' => 'file_captcha_form'
+		);
+	}
+//	pr($forms);exit;
+	return $forms;
+}
+
+function file_captcha_form($form, &$form_state, $file_data) {
+	$form = array();
+//	$form['captcha'] = array(
+//		'#type' => 'fieldset',
+//	);
+	$form['my_captcha_element'] = array(
+       '#type' => 'captcha',
+       '#captcha_type' => 'captcha/Math',
+    );
+	$form['file_data'] = array(
+		'#type' => 'value',
+		'#value'=> $file_data,
+		'#tree'	=> TRUE
+	);
+		
+	$form['submit'] = array(
+	  '#type' => 'submit',
+	  '#value' => t('Download'),
+	);	
+	return $form;
+}
+
+function file_captcha_form_submit($form, &$form_state) {
+//	pr($form_state);exit;
+	$file_data = $form_state['values']['file_data'];
+	$headers = file_get_content_headers($file_data);
+    $headers['Cache-Control'] = 'public';
+    $headers['Content-Description'] = 'File Transfer';
+    $headers['Content-Disposition'] = 'attachment; filename=' . $file_data->filename;
+    $headers['Content-Transfer-Encoding'] = 'binary';
+	file_transfer($file_data->uri, $headers);
+}
+
+	
